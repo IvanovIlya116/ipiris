@@ -1,0 +1,80 @@
+#!/bin/bash
+
+# Функция для генерации случайного 4-значного числа с неповторяющимися цифрами
+generate_number() {
+    local number=""
+    while [[ ${#number} -lt 4 ]]; do
+        local digit=$((RANDOM % 10))
+        if [[ ! "$number" == *"$digit"* ]]; then
+            number+="$digit"
+        fi
+    done
+    echo "$number"
+}
+
+# Функция для подсчета быков и коров
+calculate_bulls_cows() {
+    local guess="$1"
+    local bulls=0
+    local cows=0
+
+    for ((i = 0; i < 4; i++)); do
+        local guess_digit="${guess:i:1}"
+        local secret_digit="${secret_number:i:1}"
+        if [[ "$guess_digit" == "$secret_digit" ]]; then
+            ((bulls++))
+        elif [[ "$secret_number" == *"$guess_digit"* ]]; then
+            ((cows++))
+        fi
+    done
+    echo "$bulls $cows"
+}
+
+# Обработка SIGINT (Ctrl+C)
+trap 'echo -e "\nЧтобы выйти, введите q или Q"' SIGINT
+
+secret_number=$(generate_number)
+turn=0
+history=()
+
+echo "********************************************************************************"
+echo "* Я загадал 4-значное число с неповторяющимися цифрами. На каждом ходу делайте *"
+echo "* попытку отгадать загаданное число. Попытка - это 4-значное число с           *"
+echo "* неповторяющимися цифрами.                                                    *"
+echo "********************************************************************************"
+
+while true; do
+    read -p "Попытка $((++turn)): " guess
+    
+    if [[ "$guess" =~ ^[qQ]$ ]]; then
+        echo "Выход из игры."
+        exit 1
+    fi
+    
+    if [[ ! "$guess" =~ ^[0-9]{4}$ ]]; then
+        echo "Ошибка: Введите 4-значное число с неповторяющимися цифрами."
+        ((turn--))
+        continue
+    fi
+    
+    unique_digits=$(echo "$guess" | grep -o . | sort | uniq | wc -l)
+    if [[ $unique_digits -ne 4 ]]; then
+        echo "Ошибка: Число должно содержать 4 разные цифры."
+        ((turn--))
+        continue
+    fi
+    
+    read bulls cows < <(calculate_bulls_cows "$guess")
+    echo "Коров - $cows, Быков - $bulls"
+    history+=("$turn. $guess (Коров - $cows Быков - $bulls)")
+    
+    echo -e "История ходов:"
+    for h in "${history[@]}"; do
+        echo "$h"
+    done
+    
+    if [[ "$bulls" -eq 4 ]]; then
+        echo "Поздравляю! Вы угадали число $secret_number."
+        exit 0
+    fi
+done

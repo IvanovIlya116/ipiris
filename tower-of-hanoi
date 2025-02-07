@@ -1,0 +1,112 @@
+#!/bin/bash
+
+# Инициализация стеков
+A=(8 7 6 5 4 3 2 1)
+B=()
+C=()
+
+move=1
+error_message=""
+
+# Обработка Ctrl+C
+trap 'echo; echo "Для завершения введите q или Q"' SIGINT
+
+# Функция для отображения стеков
+print_stacks() {
+    for (( level=7; level >=0; level-- )); do
+        # Получение значений для каждого уровня
+        a_val=" "; [[ $level -lt ${#A[@]} ]] && a_val=${A[$level]}
+        b_val=" "; [[ $level -lt ${#B[@]} ]] && b_val=${B[$level]}
+        c_val=" "; [[ $level -lt ${#C[@]} ]] && c_val=${C[$level]}
+        printf "|%s|  |%s|  |%s|\n" "$a_val" "$b_val" "$c_val"
+    done
+    echo "+-+  +-+  +-+"
+    echo " A    B    C"
+}
+
+# Функция перемещения диска (без declare -n)
+move_disk() {
+    local from=$1
+    local to=$2
+
+    # Определяем массивы через косвенную адресацию
+    eval "local from_arr=(\"\${${from}[@]}\")"
+    eval "local to_arr=(\"\${${to}[@]}\")"
+
+    # Проверка пустоты исходного стека
+    if [ ${#from_arr[@]} -eq 0 ]; then
+        error_message="Ошибка: стек $from пуст."
+        return 1
+    fi
+
+    # Получаем верхний диск
+    local disk=${from_arr[${#from_arr[@]}-1]}
+
+    # Проверка правила перемещения
+    if [ ${#to_arr[@]} -gt 0 ]; then
+        local top_to=${to_arr[${#to_arr[@]}-1]}
+        if [ $disk -gt $top_to ]; then
+            error_message="Такое перемещение запрещено! Нельзя положить $disk на $top_to."
+            return 1
+        fi
+    fi
+
+    # Удаляем диск из исходного стека
+    eval "${from}=(\"\${${from}[@]:0:${#from_arr[@]}-1}\")"
+
+    # Добавляем диск в целевой стек
+    eval "${to}+=($disk)"
+
+    return 0
+}
+
+# Проверка победы
+check_victory() {
+    local target=(8 7 6 5 4 3 2 1)
+    if [[ "${B[*]}" == "${target[*]}" || "${C[*]}" == "${target[*]}" ]]; then
+        print_stacks
+        echo "Поздравляем! Вы победили!"
+        exit 0
+    fi
+}
+
+# Основной цикл
+while true; do
+    clear 2>/dev/null || printf "\033c"  # Кроссплатформенная очистка экрана
+    print_stacks
+    [ -n "$error_message" ] && echo "$error_message"
+    error_message=""
+
+    read -p "Ход № $move (откуда, куда): " input
+    input_clean=$(tr -d '[:space:]' <<<"$input" | tr '[:lower:]' '[:upper:]')
+
+    # Выход по 'q'
+    if [[ "$input_clean" == "Q" ]]; then
+        echo "Выход..."
+        exit 1
+    fi
+
+    # Проверка ввода
+    if [ ${#input_clean} -ne 2 ]; then
+        error_message="Ошибка: требуется два символа (например, AB) или Q для выхода."
+        continue
+    fi
+
+    from_stack=${input_clean:0:1}
+    to_stack=${input_clean:1:1}
+
+    if [[ ! "ABC" =~ $from_stack || ! "ABC" =~ $to_stack ]]; then
+        error_message="Ошибка: допустимы только A, B, C."
+        continue
+    fi
+
+    # Пытаемся переместить
+    if ! move_disk "$from_stack" "$to_stack"; then
+        continue
+    fi
+
+    # Проверка победы
+    check_victory
+
+    ((move++))
+done

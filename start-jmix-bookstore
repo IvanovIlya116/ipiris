@@ -1,0 +1,117 @@
+#!/bin/bash
+
+# Проверяем, установлен ли Yandex Cloud CLI
+yc --version &>/dev/null
+if [ $? -ne 0 ]; then
+    echo "Yandex Cloud CLI не установлен. Установите его перед запуском скрипта."
+    exit 1
+fi
+
+# Определяем переменные
+CLOUD_NAME="ipiris"
+FOLDER_NAME="ipiris08"
+NETWORK_NAME="bookstore-network"
+SUBNET_NAME="bookstore-subnet"
+VM_NAME="bookstore-vm"
+SSH_KEY_PATH="$HOME/.ssh/bookstore-key"
+ZONE="ru-central1-a"
+IMAGE_ID="fd86idv7gmqapoeiq5ld"  # Используем ID образа
+VM_PLATFORM="standard-v3"
+DOCKER_IMAGE="jmix/jmix-bookstore"
+
+# Устанавливаем существующее облако и папку
+CLOUD_ID=$(yc resource-manager cloud get --name "$CLOUD_NAME" --format=json | jq -r '.id')
+if [ -z "$CLOUD_ID" ]; then
+    echo "Облако $CLOUD_NAME не найдено. Убедитесь, что оно существует."
+    exit 1
+fi
+yc config set cloud-id "$CLOUD_ID"
+
+FOLDER_ID=$(yc resource-manager folder list --format=json | jq -r --arg NAME "$FOLDER_NAME" '.[] | select(.name == $NAME) | .id')
+if [ -z "$FOLDER_ID" ]; then
+    echo "Папка $FOLDER_NAME не найдена. Убедитесь, что она существует."
+    exit 1
+fi
+yc config set folder-id "$FOLDER_ID"
+
+# Создаем сеть и подсеть, если они не существуют
+if ! yc vpc network get --name "$NETWORK_NAME" &>/dev/null; then
+    yc vpc network create --name "$NETWORK_NAME"
+fi
+
+if ! yc vpc subnet get --name "$SUBNET_NAME" &>/dev/null; then
+    yc vpc subnet create \
+        --name "$SUBNET_NAME" \
+        --zone "$ZONE" \
+        --range "192.168.1.0/24" \
+        --network-name "$NETWORK_NAME"
+fi
+
+# Генерируем SSH-ключи, если их нет
+if [ ! -f "$SSH_KEY_PATH" ]; then
+    ssh-keygen -t rsa -b 2048 -f "$SSH_KEY_PATH" -N ""
+fi
+
+# Проверяем, что публичный ключ существует
+if [ ! -f "${SSH_KEY_PATH}.pub" ]; then
+    echo "Ошибка: публичный SSH-ключ не найден. Убедитесь, что ключи созданы."
+    exit 1
+fi
+
+# Читаем публичный ключ
+SSH_PUBLIC_KEY=$(cat "${SSH_KEY_PATH}.pub")
+if [ -z "$SSH_PUBLIC_KEY" ]; then
+    echo "Ошибка чтения публичного SSH-ключа."
+    exit 1
+fi
+
+# Создаем user-data для cloud-init
+USER_DATA=$(cat <<EOF
+#cloud-config
+users:
+  - name: ipiris
+    groups: sudo
+    shell: /bin/bash
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+    ssh_authorized_keys:
+      - $SSH_PUBLIC_KEY
+runcmd:
+  - echo "User 'ipiris' created and configured."
+EOF
+)
+
+# Создаем виртуальную машину, если она не существует
+if ! yc compute instance get --name "$VM_NAME" &>/dev/null; then
+    yc compute instance create \
+        --name "$VM_NAME" \
+        --zone "$ZONE" \
+        --platform "$VM_PLATFORM" \
+        --cores 2 \
+        --memory 4GB \
+        --create-boot-disk image-id="$IMAGE_ID",size=20GB \
+        --network-interface subnet-name="$SUBNET_NAME",nat-ip-version=ipv4 \
+        --metadata-from-file user-data=<(echo "$USER_DATA")
+fi
+
+# Получаем внешний IP виртуальной машины
+VM_IP=$(yc compute instance get --name "$VM_NAME" --format=json | jq -r '.network_interfaces[0].primary_v4_address.one_to_one_nat.address')
+
+# Ждём, пока виртуальная машина загрузится
+echo "Ожидание загрузки виртуальной машины..."
+sleep 120  # Увеличиваем задержку до 2 минут
+
+# Подключаемся к виртуальной машине и устанавливаем Docker
+# Используем пользователя 'ipiris'
+ssh -o StrictHostKeyChecking=no -i "$SSH_KEY_PATH" ipiris@"$VM_IP" <<EOF
+  sudo apt update && sudo apt install -y docker.io
+  sudo systemctl start docker
+  sudo systemctl enable docker
+  sudo docker run -d -p 80:8080 "$DOCKER_IMAGE"
+EOF
+
+# Вывод информации пользователю
+echo "Виртуальная машина успешно создана!"
+echo "Для подключения используйте следующую команду:"
+echo "  ssh -i $SSH_KEY_PATH ipiris@$VM_IP"
+echo "Чтобы открыть веб-приложение, перейдите по адресу:"
+echo "  http://$VM_IP"
