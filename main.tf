@@ -16,6 +16,33 @@ provider "yandex" {
   zone      = "ru-central1-a"
 }
 
+# Создание директории ssh_keys
+resource "null_resource" "create_ssh_keys_directory" {
+  provisioner "local-exec" {
+    command = "mkdir -p ${path.module}/ssh_keys"
+  }
+}
+
+# Генерация SSH-ключей
+resource "tls_private_key" "ssh_key" {
+  algorithm = "RSA"
+  rsa_bits  = 2048
+}
+
+# Сохранение приватного ключа в локальный файл
+resource "local_file" "private_key" {
+  content  = tls_private_key.ssh_key.private_key_pem
+  filename = "${path.module}/ssh_keys/id_rsa"
+  file_permission = "0600" # Устанавливаем права доступа 600
+}
+
+# Сохранение публичного ключа в локальный файл
+resource "local_file" "public_key" {
+  content  = tls_private_key.ssh_key.public_key_openssh
+  filename = "${path.module}/ssh_keys/id_rsa.pub"
+  file_permission = "0644" # Устанавливаем права доступа 644
+}
+
 # Создание облачной сети
 resource "yandex_vpc_network" "network" {
   name = "bookstore-network"
@@ -27,11 +54,6 @@ resource "yandex_vpc_subnet" "subnet" {
   zone           = "ru-central1-a"
   network_id     = yandex_vpc_network.network.id
   v4_cidr_blocks = ["192.168.1.0/24"]
-}
-
-# Чтение публичного SSH-ключа
-data "local_file" "ssh_public_key" {
-  filename = "${path.module}/ssh_keys/id_rsa.pub"
 }
 
 # Создание виртуальной машины
@@ -65,7 +87,7 @@ resource "yandex_compute_instance" "vm" {
                     shell: /bin/bash
                     sudo: ['ALL=(ALL) NOPASSWD:ALL']
                     ssh_authorized_keys:
-                      - ${data.local_file.ssh_public_key.content}
+                      - ${tls_private_key.ssh_key.public_key_openssh}
                 runcmd:
                   - sudo apt update && sudo apt install -y docker.io
                   - sudo systemctl start docker
